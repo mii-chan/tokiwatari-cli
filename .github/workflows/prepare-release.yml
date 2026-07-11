@@ -1,0 +1,75 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, e.g. 0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0 # generate-release-notes.sh needs the previous v* tag
+
+      - name: Validate version format
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "invalid version: $VERSION (expected e.g. 0.1.0)" >&2; exit 1; }
+
+      - name: Ensure the release does not already exist
+        run: |
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" > /dev/null; then
+            echo "tag v${VERSION} already exists" >&2; exit 1
+          fi
+          if git ls-remote --exit-code origin "refs/heads/release/${VERSION}" > /dev/null; then
+            echo "branch release/${VERSION} already exists" >&2; exit 1
+          fi
+          if [[ -n "$(gh pr list --head "release/${VERSION}" --state open --json number --jq '.[].number')" ]]; then
+            echo "an open PR for release/${VERSION} already exists" >&2; exit 1
+          fi
+
+      - name: Generate release notes
+        run: scripts/generate-release-notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
+
+      - name: Update Version.swift
+        run: |
+          sed -i.bak -E "s/static let version = \"[^\"]+\"/static let version = \"${VERSION}\"/" Sources/Tokiwatari/Version.swift
+          rm Sources/Tokiwatari/Version.swift.bak
+          scripts/verify-release-metadata.sh "$VERSION"
+
+      - name: Create release PR
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "release/${VERSION}"
+          git add Sources/Tokiwatari/Version.swift
+          # --allow-empty: Version.swift may already hold the target version (e.g. the first release)
+          git commit --allow-empty -m "Release v${VERSION}"
+          git push origin "release/${VERSION}"
+          {
+            echo "## Release v${VERSION}"
+            echo
+            # code-span @user so the PR body does not notify the mentioned users
+            sed -E -e 's/^## /### /' -e 's/@([A-Za-z0-9][A-Za-z0-9-]*)/`@\1`/g' "$RUNNER_TEMP/notes.md"
+            echo
+            cat .github/release-pr-template.md
+          } > "$RUNNER_TEMP/pr-body.md"
+          gh pr create --base main --head "release/${VERSION}" \
+            --title "Release v${VERSION}" --body-file "$RUNNER_TEMP/pr-body.md"

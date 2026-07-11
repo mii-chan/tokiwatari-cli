@@ -1,0 +1,11 @@
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+    authors:
+      - github-actions[bot]
+
+  categories:
+    - title: What's Changed
+      labels:
+        - "*"
