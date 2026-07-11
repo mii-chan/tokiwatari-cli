@@ -363,12 +363,19 @@ import Testing
 // MARK: - install-skill
 
 @Suite struct InstallSkillTests {
-    @Test func installsSkillAndReferencesToDest() throws {
-        let dest = FileManager.default.temporaryDirectory
+    private func temporaryDest() -> String {
+        FileManager.default.temporaryDirectory
             .appendingPathComponent("tokiwatari-skill-\(UUID().uuidString)").path
+    }
+
+    @Test func installsSkillAndReferencesToDest() throws {
+        let dest = temporaryDest()
         defer { try? FileManager.default.removeItem(atPath: dest) }
 
-        let result = try run(["install-skill", "--dest", dest, "--json"])
+        let result = try run(
+            ["install-skill", "--dest", dest, "--json"],
+            environment: ["TOKIWATARI_SKILLS_PATH": repoSkillsPath]
+        )
         #expect(result.status == 0)
         let data = try asDict(try parseJSON(result.stdout))
         #expect(data["dest"] as? String == dest)
@@ -380,6 +387,110 @@ import Testing
         let skill = try String(contentsOfFile: (dest as NSString).appendingPathComponent("SKILL.md"), encoding: .utf8)
         #expect(skill.contains("sessions"))
         #expect(skill.contains("around"))
+    }
+
+    @Test func skillsPathFlagSelectsTheCopySource() throws {
+        let dest = temporaryDest()
+        defer { try? FileManager.default.removeItem(atPath: dest) }
+
+        let result = try run(["install-skill", "--dest", dest, "--skills-path", repoSkillsPath, "--json"])
+        #expect(result.status == 0)
+        let data = try asDict(try parseJSON(result.stdout))
+        #expect((data["files"] as? [String])?.contains("SKILL.md") == true)
+    }
+
+    private func makeSkillSource(_ marker: String) throws -> String {
+        let dir = temporaryDest()
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try marker.write(toFile: (dir as NSString).appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        return dir
+    }
+
+    @Test func skillsPathFlagWinsOverEnvironment() throws {
+        let flagSource = try makeSkillSource("from-flag")
+        let envSource = try makeSkillSource("from-env")
+        let dest = temporaryDest()
+        defer {
+            try? FileManager.default.removeItem(atPath: flagSource)
+            try? FileManager.default.removeItem(atPath: envSource)
+            try? FileManager.default.removeItem(atPath: dest)
+        }
+
+        let result = try run(
+            ["install-skill", "--dest", dest, "--skills-path", flagSource, "--json"],
+            environment: ["TOKIWATARI_SKILLS_PATH": envSource]
+        )
+        #expect(result.status == 0)
+        let installed = try String(contentsOfFile: (dest as NSString).appendingPathComponent("SKILL.md"), encoding: .utf8)
+        #expect(installed == "from-flag")
+    }
+
+    @Test func invalidSkillsPathDoesNotFallBackToEnvironment() throws {
+        let result = try run(
+            ["install-skill", "--dest", temporaryDest(), "--skills-path", "/nonexistent/skills", "--json"],
+            environment: ["TOKIWATARI_SKILLS_PATH": repoSkillsPath]
+        )
+        #expect(result.status == 1)
+        let envelope = try asDict(try parseJSON(result.stdout))
+        #expect((envelope["error"] as? String)?.contains("no SKILL.md found at --skills-path") == true)
+    }
+
+    @Test func skipsHiddenFilesAndHiddenDirectoryContents() throws {
+        let source = temporaryDest()
+        let dest = temporaryDest()
+        defer {
+            try? FileManager.default.removeItem(atPath: source)
+            try? FileManager.default.removeItem(atPath: dest)
+        }
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(atPath: (source as NSString).appendingPathComponent(".hidden"), withIntermediateDirectories: true)
+        try "skill".write(toFile: (source as NSString).appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try "leak".write(toFile: (source as NSString).appendingPathComponent(".hidden/leak.md"), atomically: true, encoding: .utf8)
+        try "junk".write(toFile: (source as NSString).appendingPathComponent(".DS_Store"), atomically: true, encoding: .utf8)
+
+        let result = try run(["install-skill", "--dest", dest, "--skills-path", source, "--json"])
+        #expect(result.status == 0)
+        let data = try asDict(try parseJSON(result.stdout))
+        #expect(data["files"] as? [String] == ["SKILL.md"])
+        #expect(!fileManager.fileExists(atPath: (dest as NSString).appendingPathComponent(".hidden/leak.md")))
+    }
+
+    @Test func unwritableDestFailsWithHint() throws {
+        let parent = temporaryDest()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent)
+            try? FileManager.default.removeItem(atPath: parent)
+        }
+        try FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: parent)
+
+        let result = try run(
+            ["install-skill", "--dest", (parent as NSString).appendingPathComponent("dest"), "--json"],
+            environment: ["TOKIWATARI_SKILLS_PATH": repoSkillsPath]
+        )
+        #expect(result.status == 1)
+        let envelope = try asDict(try parseJSON(result.stdout))
+        #expect((envelope["error"] as? String)?.contains("cannot copy") == true)
+        #expect((envelope["hint"] as? String)?.contains("--dest") == true)
+    }
+
+    @Test func invalidSkillsPathFailsWithHint() throws {
+        let result = try run(["install-skill", "--dest", temporaryDest(), "--skills-path", "/nonexistent/skills", "--json"])
+        #expect(result.status == 1)
+        let envelope = try asDict(try parseJSON(result.stdout))
+        #expect((envelope["error"] as? String)?.contains("no SKILL.md found") == true)
+        #expect((envelope["hint"] as? String)?.contains("--skills-path") == true)
+    }
+
+    @Test func failsWithHintWhenNoSkillSourceIsFound() throws {
+        // Empty TOKIWATARI_SKILLS_PATH counts as unset; the products-dir binary has no discoverable skills/.
+        let result = try run(
+            ["install-skill", "--dest", temporaryDest(), "--json"],
+            environment: ["TOKIWATARI_SKILLS_PATH": ""]
+        )
+        #expect(result.status == 1)
+        let envelope = try asDict(try parseJSON(result.stdout))
+        #expect((envelope["hint"] as? String)?.contains("--skills-path") == true)
     }
 
     @Test func destIsRequired() throws {
