@@ -1,0 +1,71 @@
+name: Publish Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: |
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: macos-15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: meta
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: echo "version=${HEAD_REF#release/}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release metadata
+        run: scripts/verify-release-metadata.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Run tests
+        run: swift test
+
+      - name: Verify licenses
+        run: scripts/verify-licenses.sh
+
+      - name: Build
+        run: scripts/build-release.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Package archive
+        run: scripts/package-release.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Verify archive
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: scripts/verify-release.sh "dist/tokiwatari-cli-v${VERSION}-darwin-arm64.tar.gz" "$VERSION"
+
+      - name: Create tag
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${VERSION}" -m "v${VERSION}"
+          git push origin "v${VERSION}"
+
+      - name: Create GitHub Release
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --generate-notes \
+            "dist/tokiwatari-cli-v${VERSION}-darwin-arm64.tar.gz"

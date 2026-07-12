@@ -5,7 +5,7 @@ struct TokiwatariCLI: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "tokiwatari",
         abstract: "Search iOS debug event logs (UI events + API calls merged into one timeline) recorded by the Tokiwatari SDK",
-        version: "0.1.0",
+        version: BuildInfo.version,
         subcommands: [
             SessionsCommand.self,
             TimelineCommand.self,

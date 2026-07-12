@@ -2,6 +2,13 @@ import Foundation
 import GRDB
 import Testing
 
+/// install-skill's copy source for tests (the products-dir binary has no sibling skills/).
+let repoSkillsPath = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent() // Tests/TokiwatariTests
+    .deletingLastPathComponent() // Tests
+    .deletingLastPathComponent() // repo root
+    .appendingPathComponent("skills/tokiwatari").path
+
 let S1 = "AAAAAAAA-0000-0000-0000-000000000001"
 let S2 = "AAAAAAAA-0000-0000-0000-000000000002"
 let S3 = "AAAAAAAA-0000-0000-0000-000000000003"

@@ -2,11 +2,11 @@
 
 Tokiwatari searches the SQLite timeline of UI events and API calls that the companion [`tokiwatari-ios-sdk`](https://github.com/mii-chan/tokiwatari-ios-sdk) records inside an iOS app.
 
-Designed as an interface for AI coding agents: compact token-efficient output, `--json` with self-repair `hint`s on failure, and a bundled agent skill. The database is always opened read-only — the SDK is the sole writer.
+Designed as an interface for AI coding agents: compact token-efficient output, `--json` with self-repair `hint`s on failure, and a distributable agent skill. The database is always opened read-only — the SDK is the sole writer.
 
 ## Installation
 
-Runs as a single self-contained Swift binary. From a checkout:
+Runs as a single Swift binary. From a checkout:
 
 ```bash
 swift build -c release
@@ -42,7 +42,7 @@ seq  time          kind  summary
 | `api` | Search API logs (`--status`, `--url-like`, `--like 'GraphQL:Mutation:%'`, `--min-duration-ms`) |
 | `show [seq]` | Full detail of one event: headers, bodies, parameters |
 | `query "<SQL>"` | Read-only raw SQL escape hatch (aggregations, `json_extract`, joins) |
-| `install-skill` | Install the bundled agent skill (`SKILL.md` + references) to `--dest <path>` |
+| `install-skill` | Install the agent skill (`SKILL.md` + references) to `--dest <path>` |
 | `doctor` | Diagnose path resolution, database, schema version, WAL state |
 
 Every listing command (`timeline`, `around`, `ui`, `api`, `show`) defaults to the **latest session**; pass `--session <id>` for older ones. Their output is always ordered by `session_sequence` (per-session monotonic counter) — never by wall-clock time. `query` runs against the whole database, ordered by whatever the SQL says.
@@ -83,7 +83,7 @@ Resolution order for each setting: flag > environment variable (`TOKIWATARI_BUND
 ## Agent integration
 
 ```bash
-tokiwatari install-skill --dest ~/.claude/skills/tokiwatari
+tokiwatari install-skill --dest ~/.agents/skills/tokiwatari
 ```
 
 The skill teaches the workflow (`sessions` → `timeline` → `ui --like` → `around` → `show`) and the schema for raw SQL.
@@ -97,11 +97,13 @@ The skill teaches the workflow (`sessions` → `timeline` → `ui --like` → `a
 Built with swift-argument-parser and GRDB.swift. The behavior suite generates its fixture databases into a temp directory and spawns the built binary as a subprocess.
 
 ```bash
-swift test                                          # the whole suite
-swift build -c release --arch arm64 --arch x86_64   # universal release binary
-scripts/embed-skills.sh   # regenerate the embedded skill after editing skills/
+swift test                               # the whole suite
+scripts/build-release.sh 0.1.0     # arm64 release build + sanity checks
+scripts/package-release.sh 0.1.0   # distribution archive under dist/
 ```
+
+Releases are automated: the **Prepare Release** workflow (manual, takes a version) opens a release PR with generated release notes; merging it triggers **Publish Release**, which runs the tests, builds the arm64 archive, and creates the `v<version>` tag and GitHub Release.
 
 ## License
 
-[MIT License](LICENSE.txt)
+[MIT License](LICENSE)
