@@ -6,7 +6,13 @@ Designed as an interface for AI coding agents: compact token-efficient output, `
 
 ## Installation
 
-Runs as a single Swift binary. From a checkout:
+Runs as a single Swift binary. On Apple Silicon, install the released binary with [mise](https://github.com/jdx/mise):
+
+```bash
+mise use -g github:mii-chan/tokiwatari-cli
+```
+
+Or build from a checkout:
 
 ```bash
 swift build -c release
