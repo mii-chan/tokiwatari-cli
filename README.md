@@ -6,7 +6,13 @@ Designed as an interface for AI coding agents: compact token-efficient output, `
 
 ## Installation
 
-Runs as a single Swift binary. From a checkout:
+Runs as a single Swift binary. On Apple Silicon, install the released binary with [mise](https://github.com/jdx/mise):
+
+```bash
+mise use -g github:mii-chan/tokiwatari-cli
+```
+
+Or build from a checkout:
 
 ```bash
 swift build -c release
@@ -97,7 +103,7 @@ The skill teaches the workflow (`sessions` → `timeline` → `ui --like` → `a
 Built with swift-argument-parser and GRDB.swift. The behavior suite generates its fixture databases into a temp directory and spawns the built binary as a subprocess.
 
 ```bash
-swift test                               # the whole suite
+swift test                         # the whole suite
 scripts/build-release.sh 0.1.0     # arm64 release build + sanity checks
 scripts/package-release.sh 0.1.0   # distribution archive under dist/
 ```
