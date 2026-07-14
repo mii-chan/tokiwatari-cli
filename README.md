@@ -97,7 +97,7 @@ The skill teaches the workflow (`sessions` → `timeline` → `ui --like` → `a
 Built with swift-argument-parser and GRDB.swift. The behavior suite generates its fixture databases into a temp directory and spawns the built binary as a subprocess.
 
 ```bash
-swift test                               # the whole suite
+swift test                         # the whole suite
 scripts/build-release.sh 0.1.0     # arm64 release build + sanity checks
 scripts/package-release.sh 0.1.0   # distribution archive under dist/
 ```
