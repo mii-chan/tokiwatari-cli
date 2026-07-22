@@ -109,7 +109,7 @@ struct DoctorCommand: ParsableCommand {
 
                     do {
                         let opened = try openDatabase(dbPath)
-                        defer { try? opened.queue.close() }
+                        defer { opened.closeAndCleanup() }
                         add(
                             "open readonly",
                             true,
