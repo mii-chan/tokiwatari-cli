@@ -68,6 +68,39 @@ func listConnectedDevices() throws -> [ConnectedDevice] {
     }
 }
 
+private func isAsciiAlphanumeric(_ byte: UInt8) -> Bool {
+    (0x30...0x39).contains(byte) || (0x41...0x5A).contains(byte) || (0x61...0x7A).contains(byte)
+}
+
+/// Path-safe subset of the characters commonly used in CFBundleIdentifier;
+/// the bundle id becomes a cache directory name, so anything else is rejected.
+func validatedDeviceBundleId(_ value: String) throws -> String {
+    let bytes = Array(value.utf8)
+    guard !bytes.isEmpty, bytes.count <= 255,
+          isAsciiAlphanumeric(bytes.first!), isAsciiAlphanumeric(bytes.last!),
+          bytes.allSatisfy({ isAsciiAlphanumeric($0) || $0 == UInt8(ascii: ".") || $0 == UInt8(ascii: "-") })
+    else {
+        throw CliError(
+            "invalid bundle id: \(value)",
+            "Bundle ids must be 1-255 bytes of ASCII letters, digits, '.' or '-', starting and ending with a letter or digit. Check --bundle-id / TOKIWATARI_BUNDLE_ID / .tokiwatari.json."
+        )
+    }
+    return value
+}
+
+func validatedDeviceUdid(_ value: String) throws -> String {
+    let bytes = Array(value.utf8)
+    guard !bytes.isEmpty, bytes.count <= 128,
+          bytes.allSatisfy({ isAsciiAlphanumeric($0) || $0 == UInt8(ascii: "-") })
+    else {
+        throw CliError(
+            "invalid device udid: \(value)",
+            "UDIDs must be 1-128 bytes of ASCII letters, digits or '-'. Check --udid / TOKIWATARI_UDID / .tokiwatari.json, or run `xcrun devicectl list devices`."
+        )
+    }
+    return value
+}
+
 /// Pick the target device UDID: explicit udid, or the single connected device.
 private func resolveDeviceUdid(_ explicitUdid: String?) throws -> String {
     if let explicitUdid { return explicitUdid }
@@ -99,7 +132,9 @@ private func copyFromDevice(udid: String, bundleId: String, source: String, dest
 /// Pull db/-wal/-shm from the device's app data container into the local cache
 /// and return the db path. Pulls within DeviceCache.pullTTLMs reuse the previous snapshot unless `refresh` is set.
 func resolveDeviceDbPath(bundleId: String, explicitUdid: String?, refresh: Bool) throws -> String {
-    let udid = try resolveDeviceUdid(explicitUdid)
+    let bundleId = try validatedDeviceBundleId(bundleId)
+    if let explicitUdid { _ = try validatedDeviceUdid(explicitUdid) }
+    let udid = try validatedDeviceUdid(resolveDeviceUdid(explicitUdid))
     let directory = (deviceCacheRoot() as NSString).appendingPathComponent("\(udid)/\(bundleId)")
     let dbPath = (directory as NSString).appendingPathComponent(DatabaseContract.fileName)
 
