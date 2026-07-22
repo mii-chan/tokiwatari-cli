@@ -370,6 +370,47 @@ struct ShowCommand: ParsableCommand {
     }
 }
 
+/// Fixed internal limits.
+enum QueryResourceLimits {
+    static let maxResultColumns = 32
+    static let estimatedResultBytes = 64 * 1024 * 1024
+    static let rowFixedCost = 128
+    static let cellFixedCost = 64
+    static let numericCost = 8
+}
+
+enum QueryTruncationReason {
+    case rowLimit(Int)
+    case resultBudget(rows: Int)
+}
+
+/// The budget is not user-adjustable, so only the row-limit message may suggest --max-rows.
+func truncationNotice(_ reason: QueryTruncationReason) -> String {
+    switch reason {
+    case .rowLimit(let maxRows):
+        return "result truncated at \(maxRows) rows by --max-rows; narrow the query or raise --max-rows"
+    case .resultBudget(let rows):
+        let mib = QueryResourceLimits.estimatedResultBytes / (1024 * 1024)
+        return "result truncated after \(rows) rows because the \(mib) MiB result memory budget was reached; select fewer or smaller columns, or narrow the query"
+    }
+}
+
+/// Conservative estimate; nil once remainingBudget is exceeded (cells past that are not scanned).
+func estimatedRowCost(_ row: Row, remainingBudget: Int) -> Int? {
+    var cost = QueryResourceLimits.rowFixedCost
+    for (_, dbValue) in row {
+        cost += QueryResourceLimits.cellFixedCost
+        switch dbValue.storage {
+        case .null: break
+        case .int64, .double: cost += QueryResourceLimits.numericCost
+        case .string(let value): cost += value.utf8.count
+        case .blob(let data): cost += data.count
+        }
+        if cost > remainingBudget { return nil }
+    }
+    return cost
+}
+
 struct QueryCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "query",
@@ -377,9 +418,11 @@ struct QueryCommand: ParsableCommand {
     )
     @OptionGroup var global: GlobalOptions
     @Argument(help: "SQL SELECT statement") var sql: String
+    @Option(help: "max result rows to return (1...100000)") var maxRows: Int = 1000
 
     func run() throws {
         try runReporting(global) {
+            try requireRange(maxRows, "--max-rows", min: 1, max: 100_000)
             let dbPath = try resolveDbPath(global)
             try withDatabase(dbPath) { db in
                 let statement: Statement
@@ -399,13 +442,45 @@ struct QueryCommand: ParsableCommand {
                         "Use a SELECT statement. The Tokiwatari SDK is the sole writer of this database."
                     )
                 }
-                let rows = try Row.fetchAll(statement)
-                let data = rows.map { row -> [String: Any] in
+                // SQLite materializes all result columns at step time, before any cost check can run.
+                guard statement.columnCount <= QueryResourceLimits.maxResultColumns else {
+                    throw CliError(
+                        "too many result columns: \(statement.columnCount) (max \(QueryResourceLimits.maxResultColumns))",
+                        "Select specific columns instead of wide SELECT * joins."
+                    )
+                }
+                let cursor = try Row.fetchCursor(statement)
+                var rows: [Row] = []
+                var usedBytes = 0
+                var truncation: QueryTruncationReason?
+                while rows.count < maxRows, let row = try cursor.next() {
+                    guard let cost = estimatedRowCost(row, remainingBudget: QueryResourceLimits.estimatedResultBytes - usedBytes) else {
+                        guard !rows.isEmpty else {
+                            throw CliError(
+                                "the first query result row exceeds the result memory budget",
+                                "Select fewer or smaller columns; avoid SELECT * and large blob or JSON expressions."
+                            )
+                        }
+                        truncation = .resultBudget(rows: rows.count)
+                        break
+                    }
+                    usedBytes += cost
+                    rows.append(row.copy())
+                }
+                if truncation == nil, try cursor.next() != nil {
+                    truncation = .rowLimit(maxRows)
+                }
+                // Text output never needs the base64-expanded JSON values.
+                let data: [Any] = !global.json ? [] : rows.map { row -> [String: Any] in
                     var object: [String: Any] = [:]
                     for (column, dbValue) in row {
                         object[column] = jsonValue(dbValue)
                     }
                     return object
+                }
+                // --json keeps the plain-array contract on stdout, so the notice goes to stderr.
+                if let truncation, global.json {
+                    FileHandle.standardError.write(Data("notice: \(truncationNotice(truncation))\n".utf8))
                 }
                 printSuccess(json: global.json, data: data) {
                     if rows.isEmpty { return "(no rows)" }
@@ -413,6 +488,9 @@ struct QueryCommand: ParsableCommand {
                     var lines = [columns.joined(separator: "\t")]
                     for row in rows {
                         lines.append(columns.map { formatCell(row[$0] as DatabaseValue? ?? .null) }.joined(separator: "\t"))
+                    }
+                    if let truncation {
+                        lines.append("(\(truncationNotice(truncation)))")
                     }
                     return lines.joined(separator: "\n")
                 }
