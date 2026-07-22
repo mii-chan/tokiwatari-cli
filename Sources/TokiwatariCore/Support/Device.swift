@@ -13,26 +13,11 @@ private enum DeviceCache {
     static let pruneTTLMs: Double = 14 * 24 * 60 * 60 * 1000
 }
 
-private func deviceCacheRoot() -> String {
-    (NSHomeDirectory() as NSString).appendingPathComponent(".cache/tokiwatari/device")
-}
-
-private func pruneStaleDeviceCaches() {
-    let fileManager = FileManager.default
-    let root = deviceCacheRoot()
-    for udid in (try? fileManager.contentsOfDirectory(atPath: root)) ?? [] {
-        let udidDir = (root as NSString).appendingPathComponent(udid)
-        for bundleId in (try? fileManager.contentsOfDirectory(atPath: udidDir)) ?? [] {
-            let entryDir = (udidDir as NSString).appendingPathComponent(bundleId)
-            let dbPath = (entryDir as NSString).appendingPathComponent(DatabaseContract.fileName)
-            let modified = (try? fileManager.attributesOfItem(atPath: dbPath))?[.modificationDate] as? Date
-            if let modified, Date().timeIntervalSince(modified) * 1000 < DeviceCache.pruneTTLMs { continue }
-            try? fileManager.removeItem(atPath: entryDir)
-        }
-        if ((try? fileManager.contentsOfDirectory(atPath: udidDir)) ?? []).isEmpty {
-            try? fileManager.removeItem(atPath: udidDir)
-        }
-    }
+private func deviceCacheStore() -> DeviceCacheStore {
+    DeviceCacheStore(root: URL(
+        fileURLWithPath: (NSHomeDirectory() as NSString).appendingPathComponent(".cache/tokiwatari/device"),
+        isDirectory: true
+    ))
 }
 
 func listConnectedDevices() throws -> [ConnectedDevice] {
@@ -135,37 +120,33 @@ func resolveDeviceDbPath(bundleId: String, explicitUdid: String?, refresh: Bool)
     let bundleId = try validatedDeviceBundleId(bundleId)
     if let explicitUdid { _ = try validatedDeviceUdid(explicitUdid) }
     let udid = try validatedDeviceUdid(resolveDeviceUdid(explicitUdid))
-    let directory = (deviceCacheRoot() as NSString).appendingPathComponent("\(udid)/\(bundleId)")
-    let dbPath = (directory as NSString).appendingPathComponent(DatabaseContract.fileName)
 
-    let fileManager = FileManager.default
-    if !refresh,
-       let modified = (try? fileManager.attributesOfItem(atPath: dbPath))?[.modificationDate] as? Date,
-       Date().timeIntervalSince(modified) * 1000 < DeviceCache.pullTTLMs {
-        return dbPath
+    return try deviceCacheStore().resolveDbPath(
+        udid: udid,
+        bundleId: bundleId,
+        refresh: refresh,
+        reuseWithinMs: DeviceCache.pullTTLMs,
+        pruneOlderThanMs: DeviceCache.pruneTTLMs
+    ) { stagingPath in
+        let stagingDb = (stagingPath as NSString).appendingPathComponent(DatabaseContract.fileName)
+        do {
+            try copyFromDevice(udid: udid, bundleId: bundleId, source: DatabaseContract.containerRelativePath, destination: stagingDb)
+        } catch let e as ProcessFailure {
+            throw CliError(
+                "failed to pull \(DatabaseContract.fileName) from device \(udid)\(e.stderr.isEmpty ? "" : ": \(e.stderr)")",
+                "The app must be installed with a development signature and have run at least once (DEBUG build). Check the bundle id, or fall back to the manual export route (share Tokiwatari.exportSnapshot() output, then --db <path>)."
+            )
+        }
+        // The SDK checkpoints with TRUNCATE, so -wal/-shm are usually absent. A copy
+        // failure is indistinguishable from "absent on the device" (devicectl stderr
+        // classification is fragile), so snapshot validation is the only publish gate —
+        // a consistent but slightly older snapshot may be published.
+        for suffix in ["-wal", "-shm"] {
+            do {
+                try copyFromDevice(udid: udid, bundleId: bundleId, source: DatabaseContract.containerRelativePath + suffix, destination: stagingDb + suffix)
+            } catch {
+                try? FileManager.default.removeItem(atPath: stagingDb + suffix)
+            }
+        }
     }
-
-    try? fileManager.createDirectory(atPath: directory, withIntermediateDirectories: true)
-    // A stale -wal from a previous pull must never pair with a fresh db copy.
-    for suffix in ["", "-wal", "-shm"] {
-        try? fileManager.removeItem(atPath: dbPath + suffix)
-    }
-
-    do {
-        try copyFromDevice(udid: udid, bundleId: bundleId, source: DatabaseContract.containerRelativePath, destination: dbPath)
-    } catch let e as ProcessFailure {
-        throw CliError(
-            "failed to pull \(DatabaseContract.fileName) from device \(udid)\(e.stderr.isEmpty ? "" : ": \(e.stderr)")",
-            "The app must be installed with a development signature and have run at least once (DEBUG build). Check the bundle id, or fall back to the manual export route (share Tokiwatari.exportSnapshot() output, then --db <path>)."
-        )
-    }
-    // The SDK checkpoints with TRUNCATE, so -wal/-shm are usually absent.
-    for suffix in ["-wal", "-shm"] {
-        try? copyFromDevice(udid: udid, bundleId: bundleId, source: DatabaseContract.containerRelativePath + suffix, destination: dbPath + suffix)
-    }
-
-    // mtime = pull time, so the freshness check above works regardless of the file's original modification time on the device.
-    try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: dbPath)
-    pruneStaleDeviceCaches()
-    return dbPath
 }
