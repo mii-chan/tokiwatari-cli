@@ -76,7 +76,7 @@ When the canned subcommands can't express the question (aggregation, `json_extra
 tokiwatari query "SELECT identifier, COUNT(*) FROM events WHERE event_kind='ui' GROUP BY 1 ORDER BY 2 DESC"
 ```
 
-`query` enforces three independent limits: at most `--max-rows` rows (default 1,000; hard limit 100,000), at most 32 result columns, and a fixed 64 MiB estimated result memory budget (the last two are internal, not adjustable). Row-limit and mid-result budget truncation keep the partial result and add a notice naming the limit (text: trailing line; `--json`: stderr, so stdout stays a plain array). The column limit, or a first row alone over the budget, fails with an error and hint. The `--limit` of list commands (`sessions`/`timeline`/`ui`/`api`) caps at 10,000.
+`query` enforces three independent limits: at most `--max-rows` rows (default 1,000; hard limit 100,000), at most 32 result columns, and a fixed 64 MiB estimated result memory budget (the last two are internal, not adjustable). Row-limit and mid-result budget truncation keep the partial result and add a notice naming the limit (text: trailing line; `--json`: stderr, so stdout stays a plain array). The column limit, or a first row alone over the budget, fails with an error and hint. So does a single value over 2 MiB (a defensive SQLite-level limit, well above the 64KB-per-side body contract): oversized values cannot be read even partially — `substr()`/`json_extract()` fail the same way — so exclude such rows instead. The `--limit` of list commands (`sessions`/`timeline`/`ui`/`api`) caps at 10,000.
 
 ## 5. Pitfalls
 

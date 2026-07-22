@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import SQLite3
 
 /// SDK <-> CLI contract values for the events database.
 enum DatabaseContract {
@@ -31,6 +32,10 @@ struct OpenedDatabase {
 private func openReadonlyProbing(_ path: String) throws -> DatabaseQueue {
     var configuration = Configuration()
     configuration.readonly = true
+    configuration.prepareDatabase { db in
+        sqlite3_limit(db.sqliteConnection, SQLITE_LIMIT_ATTACHED, 0)
+        sqlite3_limit(db.sqliteConnection, SQLITE_LIMIT_LENGTH, QueryResourceLimits.sqliteLengthBytes)
+    }
     let queue = try DatabaseQueue(path: path, configuration: configuration)
     // Force a first read so WAL-recovery failures surface here, not later.
     _ = try queue.read { try Int.fetchOne($0, sql: "PRAGMA user_version") }
@@ -105,9 +110,16 @@ func checkUserVersion(_ db: Database) throws {
 func withDatabase<T>(_ dbPath: String, _ fn: (Database) throws -> T) throws -> T {
     let opened = try openDatabase(dbPath)
     defer { opened.closeAndCleanup() }
-    return try opened.queue.read { db in
-        try checkUserVersion(db)
-        return try fn(db)
+    do {
+        return try opened.queue.read { db in
+            try checkUserVersion(db)
+            return try fn(db)
+        }
+    } catch let error as DatabaseError where error.resultCode == .SQLITE_TOOBIG {
+        throw CliError(
+            "a database value exceeds the \(QueryResourceLimits.sqliteLengthBytes / (1024 * 1024)) MiB single-value limit",
+            "Values above this limit cannot be materialized, even via substr()/json_extract(). Select smaller values, avoid expressions that construct large blobs or strings, or narrow the query to exclude oversized rows."
+        )
     }
 }
 
