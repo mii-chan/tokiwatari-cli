@@ -14,6 +14,21 @@ func runReporting(_ global: GlobalOptions, _ body: () throws -> Void) throws {
     }
 }
 
+func requireRange(_ value: Int, _ flag: String, min: Int, max: Int) throws {
+    guard (min...max).contains(value) else {
+        throw CliError("invalid \(flag): \(value)", "Use a value between \(min) and \(max).")
+    }
+}
+
+func requireNonNegative(_ value: Int, _ flag: String) throws {
+    guard value >= 0 else {
+        throw CliError("invalid \(flag): \(value)", "Use a non-negative value.")
+    }
+}
+
+/// Row-count flags get a hard cap; unbounded values allow near-full-table fetches into memory.
+let listLimitMax = 10_000
+
 struct SessionsCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sessions",
@@ -24,6 +39,7 @@ struct SessionsCommand: ParsableCommand {
 
     func run() throws {
         try runReporting(global) {
+            try requireRange(limit, "--limit", min: 1, max: listLimitMax)
             let dbPath = try resolveDbPath(global)
             try withDatabase(dbPath) { db in
                 let rows = try Row.fetchAll(
@@ -72,6 +88,7 @@ struct TimelineCommand: ParsableCommand {
             if let kind, kind != "api", kind != "ui" {
                 throw CliError("invalid --kind: \(kind)", "Use --kind api or --kind ui.")
             }
+            try requireRange(limit, "--limit", min: 1, max: listLimitMax)
             let dbPath = try resolveDbPath(global)
             try withDatabase(dbPath) { db in
                 let sessionId = try resolveSession(db, explicit: session)
@@ -122,6 +139,10 @@ struct AroundCommand: ParsableCommand {
 
     func run() throws {
         try runReporting(global) {
+            try requireRange(before, "--before", min: 0, max: listLimitMax)
+            try requireRange(after, "--after", min: 0, max: listLimitMax)
+            if let beforeMs { try requireNonNegative(beforeMs, "--before-ms") }
+            if let afterMs { try requireNonNegative(afterMs, "--after-ms") }
             let dbPath = try resolveDbPath(global)
             try withDatabase(dbPath) { db in
                 let sessionId = try resolveSession(db, explicit: session)
@@ -194,6 +215,7 @@ struct UiCommand: ParsableCommand {
 
     func run() throws {
         try runReporting(global) {
+            try requireRange(limit, "--limit", min: 1, max: listLimitMax)
             let dbPath = try resolveDbPath(global)
             try withDatabase(dbPath) { db in
                 let sessionId = try resolveSession(db, explicit: session)
@@ -232,6 +254,8 @@ struct ApiCommand: ParsableCommand {
 
     func run() throws {
         try runReporting(global) {
+            try requireRange(limit, "--limit", min: 1, max: listLimitMax)
+            if let minDurationMs { try requireNonNegative(minDurationMs, "--min-duration-ms") }
             let dbPath = try resolveDbPath(global)
             try withDatabase(dbPath) { db in
                 let sessionId = try resolveSession(db, explicit: session)
