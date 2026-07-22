@@ -49,8 +49,24 @@ func normalizeArguments(_ arguments: [String]) -> [String] {
     return arguments
 }
 
+/// Parse diagnostics echo argv, so ArgumentParser is driven manually and its
+/// output routed through sanitizedForTerminal (help/version: stdout + exit 0).
 public enum TokiwatariEntry {
     public static func run() {
-        TokiwatariCLI.main(normalizeArguments(Array(CommandLine.arguments.dropFirst())))
+        do {
+            var command = try TokiwatariCLI.parseAsRoot(normalizeArguments(Array(CommandLine.arguments.dropFirst())))
+            try command.run()
+        } catch {
+            let exitCode = TokiwatariCLI.exitCode(for: error)
+            let message = TokiwatariCLI.fullMessage(for: error)
+            if !message.isEmpty {
+                if exitCode.isSuccess {
+                    print(sanitizedForTerminal(message))
+                } else {
+                    FileHandle.standardError.write(Data((sanitizedForTerminal(message) + "\n").utf8))
+                }
+            }
+            Foundation.exit(exitCode.rawValue)
+        }
     }
 }

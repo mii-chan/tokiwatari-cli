@@ -38,7 +38,7 @@ func printFailure(json: Bool, error: any Error) {
 }
 
 /// Escape control characters (except structural \n and \t) so recorded content
-/// cannot drive the terminal. --json needs nothing: JSON encoding escapes them.
+/// cannot drive the terminal. JSON output gets its bidi escaping inside compactJSON.
 func sanitizedForTerminal(_ text: String) -> String {
     guard text.unicodeScalars.contains(where: needsTerminalEscape) else { return text }
     var out = ""
@@ -52,19 +52,41 @@ func sanitizedForTerminal(_ text: String) -> String {
     return out
 }
 
-/// C0 controls (minus \t \n), DEL, and C1 controls (0x9B is a one-byte CSI).
+/// C0 controls (minus \t \n), DEL, C1 controls (0x9B is a one-byte CSI), and bidi controls.
 private func needsTerminalEscape(_ scalar: Unicode.Scalar) -> Bool {
     switch scalar.value {
     case 0x09, 0x0A: return false
     case 0x00...0x1F, 0x7F, 0x80...0x9F: return true
+    default: return isBidiControl(scalar)
+    }
+}
+
+private func isBidiControl(_ scalar: Unicode.Scalar) -> Bool {
+    switch scalar.value {
+    case 0x061C, 0x200E...0x200F, 0x202A...0x202E, 0x2066...0x2069: return true
     default: return false
     }
 }
 
-/// Single-line JSON (used for the --json envelope).
+/// Single-line JSON (used for the --json envelope). JSONSerialization emits bidi
+/// controls raw, so they are escaped here to cover every JSON output path; the
+/// \uXXXX escapes decode back to the original characters for JSON consumers.
 func compactJSON(_ value: Any) -> String {
     guard JSONSerialization.isValidJSONObject(value),
           let data = try? JSONSerialization.data(withJSONObject: value, options: [.withoutEscapingSlashes])
     else { return "null" }
-    return String(decoding: data, as: UTF8.self)
+    return escapeBidiControls(String(decoding: data, as: UTF8.self))
+}
+
+private func escapeBidiControls(_ text: String) -> String {
+    guard text.unicodeScalars.contains(where: isBidiControl) else { return text }
+    var out = ""
+    for scalar in text.unicodeScalars {
+        if isBidiControl(scalar) {
+            out += String(format: "\\u%04x", scalar.value)
+        } else {
+            out.unicodeScalars.append(scalar)
+        }
+    }
+    return out
 }
