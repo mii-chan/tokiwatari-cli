@@ -50,8 +50,8 @@ jobs:
 
       - name: Update Version.swift
         run: |
-          sed -i.bak -E "s/static let version = \"[^\"]+\"/static let version = \"${VERSION}\"/" Sources/Tokiwatari/Version.swift
-          rm Sources/Tokiwatari/Version.swift.bak
+          sed -i.bak -E "s/static let version = \"[^\"]+\"/static let version = \"${VERSION}\"/" Sources/TokiwatariCore/Version.swift
+          rm Sources/TokiwatariCore/Version.swift.bak
           scripts/verify-release-metadata.sh "$VERSION"
 
       - name: Create release PR
@@ -59,7 +59,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "release/${VERSION}"
-          git add Sources/Tokiwatari/Version.swift
+          git add Sources/TokiwatariCore/Version.swift
           # --allow-empty: Version.swift may already hold the target version (e.g. the first release)
           git commit --allow-empty -m "Release v${VERSION}"
           git push origin "release/${VERSION}"

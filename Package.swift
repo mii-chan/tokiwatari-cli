@@ -14,16 +14,21 @@ let package = Package(
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
     ],
     targets: [
-        .executableTarget(
-            name: "Tokiwatari",
+        .target(
+            name: "TokiwatariCore",
             dependencies: [
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "GRDB", package: "GRDB.swift"),
             ]
         ),
+        .executableTarget(
+            name: "Tokiwatari",
+            dependencies: ["TokiwatariCore"]
+        ),
         .testTarget(
             name: "TokiwatariTests",
             dependencies: [
+                "TokiwatariCore",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ]
         ),
