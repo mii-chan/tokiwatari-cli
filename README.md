@@ -53,6 +53,8 @@ seq  time          kind  summary
 
 Every listing command (`timeline`, `around`, `ui`, `api`, `show`) defaults to the **latest session**; pass `--session <id>` for older ones. Their output is always ordered by `session_sequence` (per-session monotonic counter) — never by wall-clock time. `query` runs against the whole database, ordered by whatever the SQL says.
 
+`query` enforces three independent limits: at most `--max-rows` rows (default 1,000; hard limit 100,000), at most 32 result columns, and a fixed 64 MiB estimated result memory budget (the last two are internal and not adjustable). Hitting the row limit, or the budget after the first row, truncates: the partial result is kept and a notice names the limit (text output: trailing line, `--json`: stderr). Exceeding the column limit, or a first row alone exceeding the budget, fails with an error and hint. These caps bound result size, not execution time — a heavy sort/join or recursive CTE can still occupy the CPU. The `--limit` of list commands caps at 10,000.
+
 GraphQL requests are recorded with a logical identifier (`GraphQL:Query:GetUser`, `GraphQL:Mutation:AddFavorite`), shown in place of the URL path in list output and searchable via `api --like`.
 
 ## Global flags
