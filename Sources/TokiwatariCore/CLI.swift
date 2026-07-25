@@ -49,4 +49,8 @@ func normalizeArguments(_ arguments: [String]) -> [String] {
     return arguments
 }
 
-TokiwatariCLI.main(normalizeArguments(Array(CommandLine.arguments.dropFirst())))
+public enum TokiwatariEntry {
+    public static func run() {
+        TokiwatariCLI.main(normalizeArguments(Array(CommandLine.arguments.dropFirst())))
+    }
+}
