@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import SQLite3
 
 /// SDK <-> CLI contract values for the events database.
 enum DatabaseContract {
@@ -17,11 +18,24 @@ struct OpenedDatabase {
     let queue: DatabaseQueue
     /// Non-null when the WAL-recovery fallback kicked in and we are reading a temp snapshot copy.
     let snapshotPath: String?
+    /// The temp directory owning the snapshot copy.
+    let snapshotDirectory: URL?
+
+    func closeAndCleanup() {
+        try? queue.close()
+        if let snapshotDirectory {
+            try? FileManager.default.removeItem(at: snapshotDirectory)
+        }
+    }
 }
 
 private func openReadonlyProbing(_ path: String) throws -> DatabaseQueue {
     var configuration = Configuration()
     configuration.readonly = true
+    configuration.prepareDatabase { db in
+        sqlite3_limit(db.sqliteConnection, SQLITE_LIMIT_ATTACHED, 0)
+        sqlite3_limit(db.sqliteConnection, SQLITE_LIMIT_LENGTH, QueryResourceLimits.sqliteLengthBytes)
+    }
     let queue = try DatabaseQueue(path: path, configuration: configuration)
     // Force a first read so WAL-recovery failures surface here, not later.
     _ = try queue.read { try Int.fetchOne($0, sql: "PRAGMA user_version") }
@@ -38,7 +52,7 @@ func openDatabase(_ dbPath: String) throws -> OpenedDatabase {
         )
     }
     do {
-        return OpenedDatabase(queue: try openReadonlyProbing(dbPath), snapshotPath: nil)
+        return OpenedDatabase(queue: try openReadonlyProbing(dbPath), snapshotPath: nil, snapshotDirectory: nil)
     } catch let primaryError {
         do {
             return try openSnapshotCopy(dbPath)
@@ -56,22 +70,29 @@ private func openSnapshotCopy(_ dbPath: String) throws -> OpenedDatabase {
     let tmpDir = fileManager.temporaryDirectory
         .appendingPathComponent("tokiwatari-\(UUID().uuidString)", isDirectory: true)
     try fileManager.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-    let copyPath = tmpDir.appendingPathComponent((dbPath as NSString).lastPathComponent).path
-    for suffix in ["", "-wal", "-shm"] {
-        let src = dbPath + suffix
-        if fileManager.fileExists(atPath: src) {
-            try fileManager.copyItem(atPath: src, toPath: copyPath + suffix)
-        }
-    }
     do {
-        return OpenedDatabase(queue: try openReadonlyProbing(copyPath), snapshotPath: copyPath)
+        let copyPath = tmpDir.appendingPathComponent((dbPath as NSString).lastPathComponent).path
+        for suffix in ["", "-wal", "-shm"] {
+            let src = dbPath + suffix
+            if fileManager.fileExists(atPath: src) {
+                try fileManager.copyItem(atPath: src, toPath: copyPath + suffix)
+            }
+        }
+        do {
+            return OpenedDatabase(queue: try openReadonlyProbing(copyPath), snapshotPath: copyPath, snapshotDirectory: tmpDir)
+        } catch {
+            // The copy may still need WAL recovery, which requires a writable connection.
+            // Recover on the private copy, then reopen readonly.
+            do {
+                let recovery = try DatabaseQueue(path: copyPath)
+                defer { try? recovery.close() }
+                _ = try recovery.read { try String.fetchOne($0, sql: "PRAGMA journal_mode") }
+            }
+            return OpenedDatabase(queue: try openReadonlyProbing(copyPath), snapshotPath: copyPath, snapshotDirectory: tmpDir)
+        }
     } catch {
-        // The copy may still need WAL recovery, which requires a writable connection.
-        // Recover on the private copy, then reopen readonly.
-        let recovery = try DatabaseQueue(path: copyPath)
-        _ = try recovery.read { try String.fetchOne($0, sql: "PRAGMA journal_mode") }
-        try recovery.close()
-        return OpenedDatabase(queue: try openReadonlyProbing(copyPath), snapshotPath: copyPath)
+        try? fileManager.removeItem(at: tmpDir)
+        throw error
     }
 }
 
@@ -88,10 +109,17 @@ func checkUserVersion(_ db: Database) throws {
 
 func withDatabase<T>(_ dbPath: String, _ fn: (Database) throws -> T) throws -> T {
     let opened = try openDatabase(dbPath)
-    defer { try? opened.queue.close() }
-    return try opened.queue.read { db in
-        try checkUserVersion(db)
-        return try fn(db)
+    defer { opened.closeAndCleanup() }
+    do {
+        return try opened.queue.read { db in
+            try checkUserVersion(db)
+            return try fn(db)
+        }
+    } catch let error as DatabaseError where error.resultCode == .SQLITE_TOOBIG {
+        throw CliError(
+            "a database value exceeds the \(QueryResourceLimits.sqliteLengthBytes / (1024 * 1024)) MiB single-value limit",
+            "Values above this limit cannot be materialized, even via substr()/json_extract(). Select smaller values, avoid expressions that construct large blobs or strings, or narrow the query to exclude oversized rows."
+        )
     }
 }
 

@@ -55,6 +55,8 @@ Every listing command (`timeline`, `around`, `ui`, `api`, `show`) defaults to th
 
 `query` enforces three independent limits: at most `--max-rows` rows (default 1,000; hard limit 100,000), at most 32 result columns, and a fixed 64 MiB estimated result memory budget (the last two are internal and not adjustable). Hitting the row limit, or the budget after the first row, truncates: the partial result is kept and a notice names the limit (text output: trailing line, `--json`: stderr). Exceeding the column limit, or a first row alone exceeding the budget, fails with an error and hint. These caps bound result size, not execution time — a heavy sort/join or recursive CTE can still occupy the CPU. The `--limit` of list commands caps at 10,000.
 
+Single values are additionally capped at 2 MiB at the SQLite level — a defensive CLI limit well above the recorded-body contract of 64KB per side, not a compatibility guarantee. Exceeding it fails with an error and hint: oversized values cannot be materialized even partially (`substr()`/`json_extract()` fail the same way), so narrow the query to exclude such rows.
+
 GraphQL requests are recorded with a logical identifier (`GraphQL:Query:GetUser`, `GraphQL:Mutation:AddFavorite`), shown in place of the URL path in list output and searchable via `api --like`.
 
 ## Global flags

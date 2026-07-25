@@ -109,7 +109,7 @@ struct DoctorCommand: ParsableCommand {
 
                     do {
                         let opened = try openDatabase(dbPath)
-                        defer { try? opened.queue.close() }
+                        defer { opened.closeAndCleanup() }
                         add(
                             "open readonly",
                             true,
@@ -154,7 +154,7 @@ struct DoctorCommand: ParsableCommand {
                 let nameWidth = checks.map(\.name.count).max() ?? 0
                 var lines = checks.map { "\($0.ok ? "ok  " : "FAIL")  \(padEnd($0.name, nameWidth))  \($0.detail)" }
                 lines.append(allOk ? "all checks passed" : "some checks FAILED")
-                print(lines.joined(separator: "\n"))
+                print(sanitizedForTerminal(lines.joined(separator: "\n")))
             }
             if !allOk { throw ExitCode(1) }
         }

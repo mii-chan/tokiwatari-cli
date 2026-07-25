@@ -373,6 +373,8 @@ struct ShowCommand: ParsableCommand {
 /// Fixed internal limits.
 enum QueryResourceLimits {
     static let maxResultColumns = 32
+    /// Defensive per-value cap; with maxResultColumns it bounds what one row can materialize (bodies are <=64KB per side by contract).
+    static let sqliteLengthBytes: Int32 = 2 * 1024 * 1024
     static let estimatedResultBytes = 64 * 1024 * 1024
     static let rowFixedCost = 128
     static let cellFixedCost = 64
@@ -434,7 +436,7 @@ struct QueryCommand: ParsableCommand {
                         "Check the SQL against the events schema (see the tokiwatari skill references/schema.md, or `tokiwatari query \"SELECT sql FROM sqlite_master\"`)."
                     )
                 }
-                guard statement.columnCount > 0 else {
+                guard statement.isReadonly, statement.columnCount > 0 else {
                     // The connection is readonly, so writes are structurally impossible anyway;
                     // fail with a clear message instead of a low-level SQLITE_READONLY error.
                     throw CliError(
