@@ -9,7 +9,7 @@ enum DatabaseContract {
 
     static let fileName = "tokiwatari_debug_events.sqlite"
     /// Where the SDK creates the database inside the app's data container.
-    static let containerRelativePath = "Library/Application Support/\(fileName)"
+    static let containerRelativePath = "Library/Application Support/Tokiwatari/\(fileName)"
 
     static let columns = "session_id, session_sequence, timestamp, event_kind, identifier, http_method, url, status_code, duration_ms, payload_json"
 }
