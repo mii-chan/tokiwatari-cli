@@ -242,12 +242,12 @@ struct UiCommand: ParsableCommand {
 struct ApiCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "api",
-        abstract: "search API logs by status, URL pattern, duration, and identifier (GraphQL operations)"
+        abstract: "search API logs by status, URL pattern, duration, and identifier"
     )
     @OptionGroup var global: GlobalOptions
     @Option(help: "exact status_code match") var status: Int?
     @Option(help: "url LIKE pattern, e.g. '%/v1/teas%'") var urlLike: String?
-    @Option(help: "identifier LIKE pattern, e.g. 'GraphQL:Mutation:%' or '%:SearchTeas'") var like: String?
+    @Option(help: "identifier LIKE pattern, e.g. 'GET /v1/%' or '%SearchTeas%'") var like: String?
     @Option(help: "only requests taking at least n ms") var minDurationMs: Int?
     @Option(help: "session id (default: latest session)") var session: String?
     @Option(help: "max events to return") var limit: Int = 50

@@ -10,7 +10,7 @@ CREATE TABLE events (
   session_sequence  INTEGER NOT NULL,   -- monotonic per session; the ONLY ordering key
   timestamp         TEXT    NOT NULL,   -- GRDB "yyyy-MM-dd HH:mm:ss.SSS" UTC string (ms precision)
   event_kind        TEXT    NOT NULL,   -- 'api' | 'ui'
-  identifier        TEXT,               -- logical id; required for ui rows; "GraphQL:<Type>:<Name>" for GraphQL api rows; main LIKE target
+  identifier        TEXT,               -- logical id; required for ui rows; app-supplied search key for api rows; main LIKE target
   http_method       TEXT,               -- api rows
   url               TEXT,               -- api rows
   status_code       INTEGER,            -- api rows
@@ -36,14 +36,18 @@ Rules that queries must respect:
 - `api` rows:
   ```json
   {
-    "request":  { "headers": {...}, "body": "...", "body_truncated": true },
-    "response": { "headers": {...}, "body": "...", "body_truncated": true },
-    "error": "..."
+    "request":  { "headers": {...}, "body": <json> },
+    "response": { "headers": {...}, "body": <json> },
+    "error": { "domain": "NSURLErrorDomain", "code": -1001 }
   }
   ```
-  `body` is a UTF-8 excerpt capped at 64KB per side; `body_truncated` appears only when the cap was hit. Sensitive header values (Authorization, Cookie, ...) are stored as `"<redacted>"`, and so are the values of sensitive JSON body keys (password, token, secret, access_token, api_key, ...; app-extendable) — matching ignores case and `_`/`-` and applies to nested objects/arrays. Bodies are re-serialized (keys sorted) only when something was redacted; otherwise the original bytes are stored verbatim, as are non-JSON bodies. `error` appears only on transport errors.
+  - `body` is a *nested JSON value* (keys sorted), not a string — `json_extract` can address into it, e.g. `$.request.body.variables.keyword`. Only JSON bodies are stored (`application/json`/`*+json`, or no Content-Type but fully parses as JSON), capped at 64KB per side after sanitization. Everything else — non-JSON, multipart, streamed, oversized — is replaced by a marker object `{"body_unavailable": "<reason>"}` with reason ∈ `too_large | sanitized_body_too_large | json_complexity_limit | invalid_json | unsupported_content_type | multipart | streamed` (`original_bytes` accompanies `sanitized_body_too_large`). There is no partial truncation: a body is stored whole or not at all.
+  - The top-level string `query` of a request body — single object or each element of a batch array — is always stored as `"<omitted>"`, GraphQL or not (query documents can carry secrets that key redaction cannot catch). `operationName` and `variables` survive.
+  - Sensitive header values (Authorization, Cookie, ...) are stored as `"<redacted>"`, and so are the values of sensitive JSON body keys (password, token, secret, access_token, api_key, ...; app-extendable) — matching ignores case and `_`/`-` and applies to nested objects/arrays.
+  - A payload over 256KB degrades in stages: the response body and then request body become `{"body_unavailable": "event_too_large"}`, followed by omission of response headers and then request headers. If still too large the whole payload is `{"payload_dropped": "event_too_large", "original_bytes": N}`. The method/url/status columns survive regardless.
+  - `error` appears when the caller passes one, always as `{"domain": ..., "code": ...}`. `request`/`response` objects are omitted entirely when empty; because components are encoded independently, `response` and `error` may coexist.
 
-  `identifier` is NULL for api rows, except GraphQL requests (JSON body with a string `query` field), where the SDK stores `GraphQL:<Type>:<Name>` — e.g. `GraphQL:Mutation:AddFavorite`; anonymous operations get `GraphQL:<Type>`. Search them with `tokiwatari api --like 'GraphQL:%'`.
+  `identifier` for api rows is the search key the app passed to `Tokiwatari.logAPIEvent(identifier:)`, stored without redaction and shown verbatim in list output; NULL when the app passed none (list output then falls back to `<method> <URL path>`). Conventions: `<METHOD> <path>` for REST calls and the GraphQL `operationName` (the Apollo interceptor recipe passes `Operation.operationName`).
 
 ## json_extract examples
 
@@ -57,6 +61,7 @@ FROM events
 WHERE event_kind = 'ui' AND identifier LIKE 'tea_tapped_%';
 
 -- API: inspect request/response bodies of failed requests
+-- (bodies are nested JSON, so paths can go deeper: '$.request.body.tea_id')
 SELECT session_sequence, url, status_code,
        json_extract(payload_json, '$.request.body')  AS request_body,
        json_extract(payload_json, '$.response.body') AS response_body

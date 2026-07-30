@@ -4,21 +4,22 @@ func padEnd(_ text: String, _ width: Int) -> String {
     text.count >= width ? text : text + String(repeating: " ", count: width - text.count)
 }
 
-/// One-line summary per event. The api subject prefers the identifier over the
-/// URL path (for GraphQL rows the path is a constant /graphql and carries no information).
+/// One-line summary per event: an api row shows its app-supplied identifier
+/// verbatim when present, otherwise "<method> <URL path>".
 func summarizeEvent(_ row: EventRow) -> String {
     guard row.eventKind == "api" else {
         return row.identifier ?? ""
     }
-    var subject = row.identifier ?? ""
-    if subject.isEmpty, let url = row.url {
-        if let components = URLComponents(string: url), !components.path.isEmpty {
+    var parts: [String]
+    if let identifier = row.identifier, !identifier.isEmpty {
+        parts = [identifier]
+    } else {
+        var subject = row.url ?? ""
+        if let components = URLComponents(string: subject), !components.path.isEmpty {
             subject = components.path
-        } else {
-            subject = url
         }
+        parts = [row.httpMethod ?? "?", subject]
     }
-    var parts = [row.httpMethod ?? "?", subject]
     if let statusCode = row.statusCode { parts.append(String(statusCode)) }
     if let durationMs = row.durationMs { parts.append("\(durationMs)ms") }
     return parts.joined(separator: " ")
@@ -50,13 +51,15 @@ private func indent(_ text: String, pad: String = "  ") -> String {
         .joined(separator: "\n")
 }
 
-/// A GraphQL request body ({"query": "...", ...}); nil for anything else.
-private func parseGraphQLBody(_ body: Any?) -> (query: String, variables: [String: Any]?)? {
-    guard let body = body as? String,
-          let parsed = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any],
-          let query = parsed["query"] as? String
-    else { return nil }
-    return (query, parsed["variables"] as? [String: Any])
+/// JSONSerialization output with the `" : "` key separator tightened to `": "`
+/// (line-anchored, so string values are untouched).
+private func prettyJSON(_ value: Any) -> String {
+    guard let data = try? JSONSerialization.data(
+        withJSONObject: value,
+        options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed]
+    ) else { return String(describing: value) }
+    return String(decoding: data, as: UTF8.self)
+        .replacingOccurrences(of: #"(?m)^(\s*"(?:[^"\\]|\\.)*") : "#, with: "$1: ", options: .regularExpression)
 }
 
 func renderEventDetail(_ row: EventRow, payload: [String: Any]?) -> String {
@@ -77,39 +80,31 @@ func renderEventDetail(_ row: EventRow, payload: [String: Any]?) -> String {
                     lines.append("  \(name): \(headers[name] ?? "")")
                 }
             }
-            if let body = part["body"], !(body is NSNull) {
-                let truncated = (part["body_truncated"] as? Bool == true) ? " (truncated at 64KB)" : ""
-                if title == "request", let gql = parseGraphQLBody(body) {
-                    // The query arrives as a JSON string ("\n"-escaped); unfold it.
-                    lines.append("\(title) body (GraphQL)\(truncated):")
-                    lines.append(indent(gql.query.trimmingCharacters(in: .whitespacesAndNewlines)))
-                    if let variables = gql.variables, !variables.isEmpty {
-                        lines.append("variables:")
-                        lines.append(indent(JSONText.prettySorted(variables)))
-                    }
-                } else {
-                    lines.append("\(title) body\(truncated):")
-                    lines.append(indent(JSONText.prettyJsonish(stringified(body))))
-                }
+            if let body = part["body"] {
+                lines.append("\(title) body:")
+                lines.append(indent(prettyJSON(body)))
             }
         }
         section("request", payload?["request"])
         section("response", payload?["response"])
         if let error = payload?["error"], !(error is NSNull) {
-            lines.append("error     \(stringified(error))")
+            lines.append("error:")
+            lines.append(indent(prettyJSON(error)))
+        }
+        if let payload {
+            let renderedKeys: Set<String> = ["request", "response", "error"]
+            let metadata = payload.filter { !renderedKeys.contains($0.key) }
+            if !metadata.isEmpty {
+                lines.append("payload:")
+                lines.append(indent(prettyJSON(metadata)))
+            }
         }
     } else {
         lines.append("identifier \(row.identifier ?? "")")
         if let payload, !payload.isEmpty {
             lines.append("parameters:")
-            lines.append(indent(JSONText.prettySorted(payload)))
+            lines.append(indent(prettyJSON(payload)))
         }
     }
     return lines.joined(separator: "\n")
-}
-
-private func stringified(_ value: Any) -> String {
-    if let string = value as? String { return string }
-    if let number = value as? NSNumber { return JSONText.rendered(number) }
-    return String(describing: value)
 }
