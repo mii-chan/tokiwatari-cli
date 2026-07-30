@@ -45,7 +45,7 @@ seq  time          kind  summary
 | `timeline` | Merged UI+API timeline of one session (`--kind`, `--limit`, `--before-seq` paging) |
 | `around <seq>` | Events around a sequence — count limits and/or time windows; the narrower wins |
 | `ui` | Search UI events by identifier (`--like 'tea_tapped_%'`) |
-| `api` | Search API logs (`--status`, `--url-like`, `--like 'GraphQL:Mutation:%'`, `--min-duration-ms`) |
+| `api` | Search API logs (`--status`, `--url-like`, `--like 'SearchTeas'`, `--min-duration-ms`) |
 | `show [seq]` | Full detail of one event: headers, bodies, parameters |
 | `query "<SQL>"` | Read-only raw SQL escape hatch (aggregations, `json_extract`, joins) |
 | `install-skill` | Install the agent skill (`SKILL.md` + references) to `--dest <path>` |
@@ -57,7 +57,7 @@ Every listing command (`timeline`, `around`, `ui`, `api`, `show`) defaults to th
 
 Single values are additionally capped at 2 MiB at the SQLite level — a defensive CLI limit well above the recorded-body contract of 64KB per side, not a compatibility guarantee. Exceeding it fails with an error and hint: oversized values cannot be materialized even partially (`substr()`/`json_extract()` fail the same way), so narrow the query to exclude such rows.
 
-GraphQL requests are recorded with a logical identifier (`GraphQL:Query:GetUser`, `GraphQL:Mutation:AddFavorite`), shown in place of the URL path in list output and searchable via `api --like`.
+API identifiers are supplied by the app through `logAPIEvent(identifier:)` and shown verbatim in list output. A common GraphQL integration passes the operation name (`SearchTeas`); use `api --url-like '%/graphql%'` when you need every GraphQL call regardless of identifier convention.
 
 ## Global flags
 
@@ -87,7 +87,7 @@ Resolution order for each setting: flag > environment variable (`TOKIWATARI_BUND
 ## Output conventions
 
 - Text output shows timestamps in **local time** (`show` includes the UTC offset); the database and `--json` output are **UTC**. Build raw-SQL time windows from the UTC values.
-- JSON bodies in `show` are pretty-printed with keys sorted for display; the stored payload keeps the original bytes.
+- API bodies are stored as sanitized nested JSON values, not raw bytes or JSON strings. `show` pretty-prints them with sorted keys; `query` can address nested values with SQLite JSON paths.
 - Sensitive header values and sensitive JSON body keys (password, token, ...) are stored as `<redacted>` by the SDK.
 
 ## Agent integration

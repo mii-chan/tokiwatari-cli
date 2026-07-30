@@ -146,31 +146,40 @@ enum FixtureFactory {
         Event(kind: "ui", identifier: identifier, payload: paramsJson)
     }
 
-    // payload_json in the same shape as the SDK (Tokiwatari.recordAPIEvent):
-    // {"request":{"headers":{...},"body":"..."},
-    //  "response":{"headers":{...},"body":"...","body_truncated":true?}}
+    // payload_json in the same shape as the SDK: nested JSON bodies,
+    // app-supplied identifier, and independently present request/response/error components.
     static func api(
         _ method: String,
         _ urlPath: String,
-        _ status: Int,
+        _ status: Int?,
         _ durationMs: Int,
-        requestBody: String? = nil,
-        responseBody: String? = nil,
-        responseTruncated: Bool = false,
-        identifier: String? = nil
+        requestBody: Any? = nil,
+        responseBody: Any? = nil,
+        error: [String: Any]? = nil,
+        identifier: String? = nil,
+        payloadOverride: [String: Any]? = nil
     ) -> Event {
-        var request: [String: Any] = ["headers": ["Accept": "application/json", "Authorization": "<redacted>"]]
-        if let requestBody { request["body"] = requestBody }
-        var response: [String: Any] = ["headers": ["Content-Type": "application/json"]]
-        if let responseBody { response["body"] = responseBody }
-        if responseTruncated { response["body_truncated"] = true }
-        let payload = try! JSONSerialization.data(
-            withJSONObject: ["request": request, "response": response],
-            options: [.sortedKeys]
-        )
+        let payloadObject: [String: Any]
+        if let payloadOverride {
+            payloadObject = payloadOverride
+        } else {
+            var request: [String: Any] = [
+                "headers": ["Accept": "application/json", "Authorization": "<redacted>"],
+            ]
+            if let requestBody { request["body"] = requestBody }
+            var components: [String: Any] = ["request": request]
+            if status != nil {
+                var response: [String: Any] = ["headers": ["Content-Type": "application/json"]]
+                if let responseBody { response["body"] = responseBody }
+                components["response"] = response
+            }
+            if let error { components["error"] = error }
+            payloadObject = components
+        }
+        let payload = try! JSONSerialization.data(withJSONObject: payloadObject, options: [.sortedKeys])
         return Event(
             kind: "api",
-            identifier: identifier, // The SDK sets an identifier for GraphQL requests only; NULL otherwise.
+            identifier: identifier,
             method: method,
             url: "https://api.example.com\(urlPath)",
             status: status,
@@ -179,12 +188,9 @@ enum FixtureFactory {
         )
     }
 
-    static func graphQLBody(query: String, variables: [String: Any], operationName: String) -> String {
-        let body = try! JSONSerialization.data(
-            withJSONObject: ["query": query, "variables": variables, "operationName": operationName],
-            options: [.sortedKeys]
-        )
-        return String(decoding: body, as: UTF8.self)
+    /// A stored GraphQL request body: the query document is never stored.
+    static func graphQLRequestBody(variables: [String: Any], operationName: String) -> [String: Any] {
+        ["query": "<omitted>", "variables": variables, "operationName": operationName]
     }
 
     /// GRDB stores Date as "yyyy-MM-dd HH:mm:ss.SSS" in UTC.
@@ -290,11 +296,11 @@ enum FixtureFactory {
     private static func session1Events() -> [Event] {
         [
             ui("screen_viewed_home"),
-            api("GET", "/v1/teas", 200, 120),
+            api("GET", "/v1/teas", 200, 120, identifier: "GET /v1/teas"),
             ui("tea_tapped_10", #"{"tea_id":10}"#),
-            api("GET", "/v1/teas/10", 200, 95),
+            api("GET", "/v1/teas/10", 200, 95, identifier: "GET /v1/teas/10"),
             ui("tea_tapped_11", #"{"tea_id":11}"#),
-            api("GET", "/v1/teas/11", 200, 101),
+            api("GET", "/v1/teas/11", 200, 101, identifier: "GET /v1/teas/11"),
             ui("screen_viewed_settings"),
             ui("toggle_switched_notifications", #"{"enabled":true}"#),
         ]
@@ -310,23 +316,15 @@ enum FixtureFactory {
         events.append(ui("screen_viewed_search"))
         events.append(api(
             "POST", "/graphql", 200, 145,
-            requestBody: graphQLBody(
-                query: "query SearchTeas($keyword: String!) {\n  search(keyword: $keyword) {\n    id\n    name\n  }\n}",
-                variables: ["keyword": "hojicha"],
-                operationName: "SearchTeas"
-            ),
-            responseBody: #"{"data":{"search":[{"id":21,"name":"Hojicha"}]}}"#,
-            identifier: "GraphQL:Query:SearchTeas"
+            requestBody: graphQLRequestBody(variables: ["keyword": "hojicha"], operationName: "SearchTeas"),
+            responseBody: ["data": ["search": [["id": 21, "name": "Hojicha"]]]],
+            identifier: "SearchTeas"
         ))
         events.append(api(
             "POST", "/graphql", 200, 210,
-            requestBody: graphQLBody(
-                query: "mutation AddFavorite($teaId: ID!) {\n  addFavorite(teaId: $teaId) {\n    ok\n  }\n}",
-                variables: ["teaId": 21],
-                operationName: "AddFavorite"
-            ),
-            responseBody: #"{"data":{"addFavorite":{"ok":true}}}"#,
-            identifier: "GraphQL:Mutation:AddFavorite"
+            requestBody: graphQLRequestBody(variables: ["teaId": 21], operationName: "AddFavorite"),
+            responseBody: ["data": ["addFavorite": ["ok": true]]],
+            identifier: "AddFavorite"
         ))
         return events
     }
@@ -336,26 +334,27 @@ enum FixtureFactory {
         [
             ui("screen_viewed_home"),
             api("GET", "/v1/teas", 200, 152,
-                responseBody: #"{"teas":[{"id":1,"name":"Sencha"},{"id":2,"name":"Gyokuro"}"#,
-                responseTruncated: true), // 64KB truncation example
+                responseBody: ["body_unavailable": "sanitized_body_too_large", "original_bytes": 87543]),
             ui("tea_tapped_1", #"{"tea_id":1}"#),
             api("GET", "/v1/teas/1", 200, 98),
             ui("tea_tapped_2", #"{"tea_id":2}"#),
-            api("GET", "/v1/teas/2", 404, 87, responseBody: #"{"error":"not_found"}"#),
+            api("GET", "/v1/teas/2", 404, 87, responseBody: ["error": "not_found"]),
             ui("screen_viewed_brew"),
             api("POST", "/v1/brews", 500, 1240,
-                // Keys deliberately unsorted: verifies storage keeps the original bytes while `show` sorts for display.
-                requestBody: #"{"tea_id":2,"steep_seconds":90}"#,
-                responseBody: #"{"error":"timer_backend_timeout"}"#),
+                requestBody: ["tea_id": 2, "steep_seconds": 90],
+                responseBody: ["error": "timer_backend_timeout"]),
             ui("alert_shown_brew_error"),
             ui("tea_tapped_3", #"{"tea_id":3}"#),
-            api("GET", "/v1/teas/3", 200, 110),
+            api("GET", "/v1/teas/3", 200, 110, responseBody: NSNull()),
             ui("tea_tapped_4", #"{"tea_id":4}"#),
-            api("GET", "/v1/teas/4", 200, 104),
+            api("GET", "/v1/teas/4", 200, 104, payloadOverride: [
+                "payload_dropped": "event_too_large",
+                "original_bytes": 300_000,
+            ]),
             ui("screen_viewed_brew"),
-            api("POST", "/v1/brews", 201, 320, requestBody: #"{"steep_seconds":60,"tea_id":3}"#),
+            api("POST", "/v1/brews", 201, 320, requestBody: ["steep_seconds": 60, "tea_id": 3]),
             ui("screen_viewed_tasting"),
-            api("POST", "/v1/tasting_notes", 200, 640),
+            api("POST", "/v1/tasting_notes", nil, 640, error: ["domain": "NSURLErrorDomain", "code": -1001]),
             ui("screen_viewed_brew_complete"),
             ui("button_tapped_back_to_home"),
             ui("screen_viewed_home"),

@@ -41,7 +41,7 @@ import Testing
         #expect(output[0] == "session \(S3)  20 events  2026-07-05 10:00:00 ~ 10:00:05")
         #expect(output[1].firstMatch(of: /^seq\s+time\s+kind\s+summary$/) != nil)
         #expect(output.count == 2 + 20)
-        // API summary format: "METHOD path status durationms"
+        // API rows without an identifier fall back to: "METHOD path status durationms"
         let brewLine = try #require(output.first { $0.contains("/v1/brews 500") })
         #expect(brewLine.firstMatch(of: /^8\s+10:00:02\.000\s+api\s+POST \/v1\/brews 500 1240ms$/) != nil)
         // UI summary is the identifier
@@ -99,6 +99,12 @@ import Testing
         #expect((envelope["error"] as? String)?.contains("session not found") == true)
         #expect((envelope["hint"] as? String)?.contains("tokiwatari sessions") == true)
     }
+
+    @Test func apiSummaryShowsTheIdentifierVerbatim() throws {
+        let result = try runOk(["timeline", "--session", S1])
+        #expect(result.stdout.firstMatch(of: /api\s+GET \/v1\/teas 200 120ms/) != nil)
+        #expect(!result.stdout.contains("GET GET"))
+    }
 }
 
 // MARK: - ui / api
@@ -145,19 +151,15 @@ import Testing
     }
 }
 
-// MARK: - GraphQL: identifier = "GraphQL:<Type>:<Name>"
+// MARK: - GraphQL: identifier is the app-supplied operationName; query stored as "<omitted>"
 
 @Suite struct GraphQLTests {
     @Test func apiLikeSearchesGraphQLOperationsByIdentifier() throws {
-        let all = try asDict(try runJSON(["api", "--like", "GraphQL:%", "--session", S2]))
+        let all = try asDict(try runJSON(["api", "--like", "%Favorite%", "--session", S2]))
         let identifiers = try asArray(all["events"]).map { try asDict($0)["identifier"] as? String }
-        #expect(identifiers == ["GraphQL:Query:SearchTeas", "GraphQL:Mutation:AddFavorite"])
+        #expect(identifiers == ["AddFavorite"])
 
-        let mutations = try asDict(try runJSON(["api", "--like", "GraphQL:Mutation:%", "--session", S2]))
-        let mutationIds = try asArray(mutations["events"]).map { try asDict($0)["identifier"] as? String }
-        #expect(mutationIds == ["GraphQL:Mutation:AddFavorite"])
-
-        let byName = try asDict(try runJSON(["api", "--like", "%:SearchTeas", "--session", S2]))
+        let byName = try asDict(try runJSON(["api", "--like", "SearchTeas", "--session", S2]))
         let byNameEvents = try asArray(byName["events"])
         #expect(byNameEvents.count == 1)
         #expect(try asDict(byNameEvents[0])["url"] as? String == "https://api.example.com/graphql")
@@ -165,19 +167,18 @@ import Testing
 
     @Test func timelineShowsTheOperationInsteadOfThePath() throws {
         let result = try runOk(["timeline", "--session", S2])
-        #expect(result.stdout.firstMatch(of: /api\s+POST GraphQL:Query:SearchTeas 200 145ms/) != nil)
-        #expect(result.stdout.firstMatch(of: /api\s+POST GraphQL:Mutation:AddFavorite 200 210ms/) != nil)
-        #expect(!result.stdout.contains("POST /graphql")) // the path is replaced when identifier exists
+        #expect(result.stdout.firstMatch(of: /api\s+SearchTeas 200 145ms/) != nil)
+        #expect(result.stdout.firstMatch(of: /api\s+AddFavorite 200 210ms/) != nil)
+        #expect(!result.stdout.contains("/graphql")) // the path is replaced when identifier exists
     }
 
-    @Test func showRendersTheQueryUnfoldedPlusVariables() throws {
-        let result = try runOk(["show", "--like", "GraphQL:Query:%", "--session", S2])
-        #expect(result.stdout.contains("call      POST GraphQL:Query:SearchTeas 200 145ms"))
-        #expect(result.stdout.contains("request body (GraphQL):"))
-        // "\n" in the JSON string becomes real newlines
-        #expect(result.stdout.firstMatch(of: /query SearchTeas\(\$keyword: String!\) \{\n\s+search\(keyword: \$keyword\)/) != nil)
-        #expect(result.stdout.contains("variables:"))
-        #expect(result.stdout.contains(#""keyword": "hojicha""#))
+    @Test func showRendersGraphQLBodyAsJSONWithQueryOmitted() throws {
+        let result = try runOk(["show", "--like", "SearchTeas", "--session", S2])
+        #expect(result.stdout.contains("call      SearchTeas 200 145ms"))
+        #expect(result.stdout.contains("request body:"))
+        #expect(result.stdout.contains(#""query": "<omitted>""#))
+        #expect(result.stdout.firstMatch(of: /"variables": \{\n\s+"keyword": "hojicha"\n\s+\}/) != nil)
+        #expect(!result.stdout.contains("keyword = ")) // not an NSDictionary description
     }
 }
 
@@ -265,10 +266,12 @@ import Testing
         #expect(asInt(data["status_code"]) == 500)
         let payload = try asDict(data["payload"])
         let request = try asDict(payload["request"])
-        #expect(request["body"] as? String == #"{"tea_id":2,"steep_seconds":90}"#) // stored bytes, original key order
+        let requestBody = try asDict(request["body"])
+        #expect(asInt(requestBody["tea_id"]) == 2)
+        #expect(asInt(requestBody["steep_seconds"]) == 90)
         #expect(try asDict(request["headers"])["Authorization"] as? String == "<redacted>")
-        let response = try asDict(payload["response"])
-        #expect((response["body"] as? String)?.contains("timer_backend_timeout") == true)
+        let responseBody = try asDict(try asDict(payload["response"])["body"])
+        #expect(responseBody["error"] as? String == "timer_backend_timeout")
     }
 
     @Test func byStatusPicksTheLatestMatchAndRendersBodies() throws {
@@ -276,14 +279,32 @@ import Testing
         #expect(result.stdout.contains("kind      api"))
         #expect(result.stdout.contains("POST /v1/brews 500 1240ms"))
         #expect(result.stdout.contains("request body:"))
-        // pretty-printed with keys sorted for display (stored value keeps quantity first)
         #expect(result.stdout.firstMatch(of: /"steep_seconds": 90,\n\s+"tea_id": 2/) != nil)
         #expect(result.stdout.contains("timer_backend_timeout"))
     }
 
-    @Test func bodyTruncatedIsSurfaced() throws {
-        let result = try runOk(["show", "2"]) // GET /v1/teas with response.body_truncated = true
-        #expect(result.stdout.contains("response body (truncated at 64KB):"))
+    @Test func bodyUnavailableMarkerIsShown() throws {
+        let result = try runOk(["show", "2"]) // GET /v1/teas whose response body the SDK refused to store
+        #expect(result.stdout.contains(#""body_unavailable": "sanitized_body_too_large""#))
+        #expect(result.stdout.contains(#""original_bytes": 87543"#))
+    }
+
+    @Test func jsonNullBodyIsShown() throws {
+        let result = try runOk(["show", "11"]) // GET /v1/teas/3 with a JSON null response
+        #expect(result.stdout.contains("response body:\n  null"))
+    }
+
+    @Test func fullyDroppedPayloadMarkerIsShown() throws {
+        let result = try runOk(["show", "13"]) // GET /v1/teas/4 with a fully degraded payload
+        #expect(result.stdout.contains("payload:"))
+        #expect(result.stdout.contains(#""payload_dropped": "event_too_large""#))
+        #expect(result.stdout.contains(#""original_bytes": 300000"#))
+    }
+
+    @Test func transportErrorRendersAsJSON() throws {
+        let result = try runOk(["show", "17", "--session", S3]) // POST /v1/tasting_notes, no response
+        #expect(result.stdout.firstMatch(of: /error:\n\s+\{\n\s+"code": -1001,\n\s+"domain": "NSURLErrorDomain"\n\s+\}/) != nil)
+        #expect(!result.stdout.contains("response body"))
     }
 
     @Test func withoutArgumentsReturnsLatestMatchWithUiParameters() throws {

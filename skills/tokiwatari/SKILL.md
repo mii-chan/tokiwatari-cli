@@ -41,7 +41,7 @@ tokiwatari show --url-like '%/v1/brews%'
 
 `around` accepts count limits (`--before`/`--after`, default 10 each) and time windows (`--before-ms`/`--after-ms`); when combined, both conditions apply, so the narrower one wins. Output is always ordered by `session_sequence`.
 
-`show` prints ONE event in full: list output stays compact on purpose; use `show` whenever you need bodies. Truncated bodies are marked (`truncated at 64KB`); sensitive values — headers like Authorization/Cookie and JSON body keys like password/token — are stored as `<redacted>`.
+`show` prints ONE event in full: list output stays compact on purpose; use `show` whenever you need bodies. Bodies the SDK could not store whole (non-JSON, multipart, streamed, oversized) appear as `{"body_unavailable": "<reason>"}` markers — there is no partial truncation. A request body's top-level `query` string is never stored (`show` prints `"query": "<omitted>"`). Sensitive values — headers like Authorization/Cookie and JSON body keys like password/token — are stored as `<redacted>`.
 
 API search:
 
@@ -49,13 +49,14 @@ API search:
 tokiwatari api --status 500
 tokiwatari api --url-like '%/v1/teas%' --min-duration-ms 1000
 
-# GraphQL: operations are recorded as identifier "GraphQL:<Type>:<Name>"
-tokiwatari api --like 'GraphQL:%'             # every GraphQL call
-tokiwatari api --like 'GraphQL:Mutation:%'    # mutations only
-tokiwatari api --like '%:SearchTeas'         # by operation name
+# --like searches the identifier the app passed to logAPIEvent — naming is
+# app-specific; common conventions:
+tokiwatari api --like 'GET %'            # REST: "<METHOD> <path>" identifiers
+tokiwatari api --like 'SearchTeas'       # GraphQL: the operationName
+tokiwatari api --url-like '%/graphql%'   # every GraphQL call, regardless of naming
 ```
 
-GraphQL rows show the operation instead of the URL path in list output (`POST GraphQL:Query:SearchTeas 200 145ms`); `show` unfolds the query text and prints `variables` separately.
+Rows with an identifier show it verbatim in list output (`SearchTeas 200 145ms`); rows without one fall back to `<method> <path>`. GraphQL `operationName` and `variables` survive in the request body (`show`); the query document itself does not.
 
 ## 3. Global flags
 
