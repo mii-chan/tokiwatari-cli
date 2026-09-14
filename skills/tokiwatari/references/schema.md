@@ -29,6 +29,7 @@ Rules that queries must respect:
 - `ORDER BY session_sequence` — never order *events* by `timestamp`. (The one sanctioned timestamp ordering is picking the latest *session* via `MAX(timestamp)`, as in the aggregate example below.)
 - `timestamp` is an UTC string whose lexicographic order equals chronological order, so time windows are plain string comparisons: `WHERE session_id = ? AND timestamp BETWEEN '2026-07-05 10:00:00.000' AND '2026-07-05 10:05:00.000'`. Note: the CLI's *text* output displays these in local time; the stored values and `--json` output are UTC — build SQL time windows from the UTC values.
 - The CLI connection is readonly; only SELECTs work in `tokiwatari query`.
+- `url` is the sanitized URL: query *values* are `<redacted>` unless the app allowlisted them, userinfo and fragments are stripped, and unparseable URLs are stored as `<unavailable>`. Match `LIKE` patterns on the path, not on query values.
 
 ## payload_json shape
 
