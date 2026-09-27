@@ -48,7 +48,7 @@ func openDatabase(_ dbPath: String) throws -> OpenedDatabase {
     guard FileManager.default.fileExists(atPath: dbPath) else {
         throw CliError(
             "database not found: \(dbPath)",
-            "Launch the app (DEBUG build with the Tokiwatari SDK) so it creates \(DatabaseContract.fileName), or check --db / --bundle-id / --udid. `tokiwatari doctor` shows how the path was resolved."
+            "Launch the app with the Tokiwatari SDK configured so it creates \(DatabaseContract.fileName), or check --db / --bundle-id / --udid. `tokiwatari doctor` shows how the path was resolved."
         )
     }
     do {
