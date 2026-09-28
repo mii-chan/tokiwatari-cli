@@ -134,7 +134,7 @@ func resolveDeviceDbPath(bundleId: String, explicitUdid: String?, refresh: Bool)
         } catch let e as ProcessFailure {
             throw CliError(
                 "failed to pull \(DatabaseContract.fileName) from device \(udid)\(e.stderr.isEmpty ? "" : ": \(e.stderr)")",
-                "The app must be installed with a development signature and have run at least once (DEBUG build). Check the bundle id, or fall back to the manual export route (share Tokiwatari.exportSnapshot() output, then --db <path>)."
+                "The app must be installed with a development signature and have run at least once with the Tokiwatari SDK configured. Check the bundle id, or fall back to the manual export route (share Tokiwatari.exportSnapshot() output, then --db <path>)."
             )
         }
         // The SDK checkpoints with TRUNCATE, so -wal/-shm are usually absent. A copy
